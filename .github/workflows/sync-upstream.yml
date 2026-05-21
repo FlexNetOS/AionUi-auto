@@ -1,0 +1,85 @@
+name: sync-upstream
+
+# Force-mirrors origin/main from iOfficeAI/AionUi:main every 6 hours and on demand.
+# main is treated as a *pristine* mirror — humans never push to it. Features live on
+# feature/* branches that PR into develop. See docs/FORK_WORKFLOW.md for the model.
+
+on:
+  schedule:
+    # Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why are you triggering this manually?'
+        required: false
+        default: 'manual sync'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  mirror-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout origin/main with full history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git identity for the bot
+        run: |
+          git config user.name 'flexnetos-sync-bot'
+          git config user.email 'flexnetos-sync-bot@users.noreply.github.com'
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream https://github.com/iOfficeAI/AionUi.git
+          git fetch upstream main --tags
+
+      - name: Compare current main vs upstream/main
+        id: compare
+        run: |
+          local_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse upstream/main)"
+          echo "local_sha=$local_sha"     >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          if [ "$local_sha" = "$upstream_sha" ]; then
+            echo "no_change=true" >> "$GITHUB_OUTPUT"
+            echo "Already in sync at $local_sha — nothing to do."
+          else
+            echo "no_change=false" >> "$GITHUB_OUTPUT"
+            echo "Will mirror upstream/main ($upstream_sha) onto origin/main (was $local_sha)."
+          fi
+
+      - name: Reset main to upstream/main and force-push (mirror)
+        if: steps.compare.outputs.no_change == 'false'
+        run: |
+          git reset --hard upstream/main
+          # --force-with-lease guards against silent overwrite if main moved underneath us
+          git push origin main --force-with-lease
+
+      - name: Mirror upstream tags into origin
+        if: steps.compare.outputs.no_change == 'false'
+        run: |
+          # Push any new upstream tags so releases stay parity. Tags are immutable so
+          # we don't need --force here.
+          git push origin --tags || true
+
+      - name: File a tracking issue if force-with-lease was rejected
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --title 'sync-upstream failed — human pushed to main?' \
+            --label 'sync-failure' \
+            --body "Workflow run [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) failed.\n\nLikely cause: someone pushed to origin/main (which must stay a pristine mirror of upstream/main). Investigate and resolve before retrying." \
+            || true

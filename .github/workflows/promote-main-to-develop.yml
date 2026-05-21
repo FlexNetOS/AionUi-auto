@@ -1,0 +1,110 @@
+name: promote-main-to-develop
+
+# After sync-upstream updates origin/main with upstream changes, promote those changes
+# into origin/develop. Fast-forward if possible; otherwise open / update a PR.
+# See docs/FORK_WORKFLOW.md.
+
+on:
+  workflow_run:
+    workflows: ['sync-upstream']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: promote-main-to-develop
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    # Only run if the chained sync-upstream run was successful (or if dispatched manually)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop with full history
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git identity for the bot
+        run: |
+          git config user.name 'flexnetos-sync-bot'
+          git config user.email 'flexnetos-sync-bot@users.noreply.github.com'
+
+      - name: Fetch origin/main
+        run: git fetch origin main
+
+      - name: Decide promotion strategy
+        id: strategy
+        run: |
+          main_sha="$(git rev-parse origin/main)"
+          dev_sha="$(git rev-parse HEAD)"
+          echo "main_sha=$main_sha"   >> "$GITHUB_OUTPUT"
+          echo "dev_sha=$dev_sha"     >> "$GITHUB_OUTPUT"
+
+          if [ "$main_sha" = "$dev_sha" ]; then
+            echo 'develop already at origin/main — nothing to promote.'
+            echo "action=noop" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Can we fast-forward develop to origin/main? (i.e. develop is an ancestor of main)
+          if git merge-base --is-ancestor HEAD origin/main; then
+            echo 'develop is ancestor of origin/main — fast-forward is safe.'
+            echo "action=ff" >> "$GITHUB_OUTPUT"
+          else
+            echo 'develop has diverged from main — need a PR.'
+            echo "action=pr" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fast-forward develop to origin/main
+        if: steps.strategy.outputs.action == 'ff'
+        run: |
+          git merge --ff-only origin/main
+          git push origin develop
+
+      - name: Prepare sync branch for PR
+        if: steps.strategy.outputs.action == 'pr'
+        id: prep
+        run: |
+          # Branch name is stable so the PR action updates the existing PR rather than spawning duplicates
+          sync_branch='chore/sync-upstream-into-develop'
+          echo "sync_branch=$sync_branch" >> "$GITHUB_OUTPUT"
+          # Start sync branch from develop, then merge main in (allow conflicts to surface in the PR)
+          git checkout -B "$sync_branch" develop
+          if git merge --no-edit --no-ff origin/main; then
+            echo 'merge_clean=true' >> "$GITHUB_OUTPUT"
+          else
+            # Leave conflict markers in the tree so the PR is reviewable
+            echo 'merge_clean=false' >> "$GITHUB_OUTPUT"
+            # Stage everything (including unresolved conflicts) so create-pull-request can produce a diff
+            git add -A
+            git commit -m 'chore: sync upstream into develop (CONFLICTS — needs human resolution)' || true
+          fi
+
+      - name: Open / update sync PR
+        if: steps.strategy.outputs.action == 'pr'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          base: develop
+          branch: ${{ steps.prep.outputs.sync_branch }}
+          title: 'chore: sync upstream into develop'
+          body: |
+            Automated promotion of `origin/main` (which mirrors `iOfficeAI/AionUi:main`) into `develop`.
+
+            - main SHA: `${{ steps.strategy.outputs.main_sha }}`
+            - develop SHA before sync: `${{ steps.strategy.outputs.dev_sha }}`
+            - Merge clean: `${{ steps.prep.outputs.merge_clean }}`
+
+            If `merge_clean = false`, this PR contains conflict markers — resolve them and push back to the same branch (`${{ steps.prep.outputs.sync_branch }}`), or close this PR and rebase manually.
+          labels: |
+            sync
+            chore
+          delete-branch: false
