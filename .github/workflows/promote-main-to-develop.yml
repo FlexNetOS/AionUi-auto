@@ -2,6 +2,7 @@ name: promote-main-to-develop
 
 # After sync-upstream updates origin/main with upstream changes, promote those changes
 # into origin/develop. Fast-forward if possible; otherwise open / update a PR.
+# Cleanly no-ops when develop already contains all of main (the steady-state).
 # See docs/FORK_WORKFLOW.md.
 
 on:
@@ -49,20 +50,32 @@ jobs:
           echo "main_sha=$main_sha"   >> "$GITHUB_OUTPUT"
           echo "dev_sha=$dev_sha"     >> "$GITHUB_OUTPUT"
 
+          # Case 1: develop and main point at the same commit
           if [ "$main_sha" = "$dev_sha" ]; then
-            echo 'develop already at origin/main — nothing to promote.'
+            echo 'develop already equals origin/main — nothing to promote.'
             echo "action=noop" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Can we fast-forward develop to origin/main? (i.e. develop is an ancestor of main)
+          # Case 2: main is an ancestor of develop (develop already contains all of main).
+          # Steady-state once we have any feature commits on develop. No promotion needed.
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo 'develop already contains all of origin/main — nothing to promote.'
+            echo "action=noop" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Case 3: develop is an ancestor of main (main is strictly ahead of develop with
+          # no divergence). Fast-forward is safe.
           if git merge-base --is-ancestor HEAD origin/main; then
             echo 'develop is ancestor of origin/main — fast-forward is safe.'
             echo "action=ff" >> "$GITHUB_OUTPUT"
-          else
-            echo 'develop has diverged from main — need a PR.'
-            echo "action=pr" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          # Case 4: actual divergence — need a PR
+          echo 'develop has diverged from main — opening sync PR.'
+          echo "action=pr" >> "$GITHUB_OUTPUT"
 
       - name: Fast-forward develop to origin/main
         if: steps.strategy.outputs.action == 'ff'
@@ -70,41 +83,53 @@ jobs:
           git merge --ff-only origin/main
           git push origin develop
 
-      - name: Prepare sync branch for PR
+      - name: Prepare and push sync branch
         if: steps.strategy.outputs.action == 'pr'
         id: prep
         run: |
-          # Branch name is stable so the PR action updates the existing PR rather than spawning duplicates
+          # Stable branch name so re-runs update the same PR rather than spawning duplicates
           sync_branch='chore/sync-upstream-into-develop'
           echo "sync_branch=$sync_branch" >> "$GITHUB_OUTPUT"
-          # Start sync branch from develop, then merge main in (allow conflicts to surface in the PR)
+
+          # Start fresh from develop (delete any stale remote sync branch first)
+          git push origin --delete "$sync_branch" 2>/dev/null || true
           git checkout -B "$sync_branch" develop
+
           if git merge --no-edit --no-ff origin/main; then
             echo 'merge_clean=true' >> "$GITHUB_OUTPUT"
           else
-            # Leave conflict markers in the tree so the PR is reviewable
             echo 'merge_clean=false' >> "$GITHUB_OUTPUT"
-            # Stage everything (including unresolved conflicts) so create-pull-request can produce a diff
+            # Leave conflict markers in the tree so the PR is reviewable
             git add -A
-            git commit -m 'chore: sync upstream into develop (CONFLICTS — needs human resolution)' || true
+            git commit -m 'chore: sync upstream into develop (CONFLICTS — needs human resolution)'
           fi
 
-      - name: Open / update sync PR
+          git push origin "$sync_branch"
+
+      - name: Open or update sync PR
         if: steps.strategy.outputs.action == 'pr'
-        uses: peter-evans/create-pull-request@v7
-        with:
-          base: develop
-          branch: ${{ steps.prep.outputs.sync_branch }}
-          title: 'chore: sync upstream into develop'
-          body: |
-            Automated promotion of `origin/main` (which mirrors `iOfficeAI/AionUi:main`) into `develop`.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sync_branch='${{ steps.prep.outputs.sync_branch }}'
+          existing=$(gh pr list --head "$sync_branch" --base develop --state open --json number --jq '.[0].number // empty')
+          body="Automated promotion of \`origin/main\` (mirrors \`iOfficeAI/AionUi:main\`) into develop.
 
-            - main SHA: `${{ steps.strategy.outputs.main_sha }}`
-            - develop SHA before sync: `${{ steps.strategy.outputs.dev_sha }}`
-            - Merge clean: `${{ steps.prep.outputs.merge_clean }}`
+          - main SHA: \`${{ steps.strategy.outputs.main_sha }}\`
+          - develop SHA before sync: \`${{ steps.strategy.outputs.dev_sha }}\`
+          - Merge clean: \`${{ steps.prep.outputs.merge_clean }}\`
 
-            If `merge_clean = false`, this PR contains conflict markers — resolve them and push back to the same branch (`${{ steps.prep.outputs.sync_branch }}`), or close this PR and rebase manually.
-          labels: |
-            sync
-            chore
-          delete-branch: false
+          If \`merge_clean = false\`, this PR contains conflict markers — resolve them and push back to the same branch (\`$sync_branch\`), or close this PR and rebase manually."
+
+          if [ -n "$existing" ]; then
+            echo "PR #$existing already open — refreshing comment"
+            gh pr comment "$existing" --body "Updated by promote run [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}): main SHA \`${{ steps.strategy.outputs.main_sha }}\`, merge_clean=\`${{ steps.prep.outputs.merge_clean }}\`."
+          else
+            gh pr create \
+              --base develop \
+              --head "$sync_branch" \
+              --title 'chore: sync upstream into develop' \
+              --body "$body" \
+              --label sync \
+              --label chore
+          fi
