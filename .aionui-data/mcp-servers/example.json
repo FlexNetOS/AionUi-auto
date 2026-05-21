@@ -1,0 +1,15 @@
+{
+  "_comment": "Reference template — schema matches IMcpServer from src/common/config/storage.ts:603. Copy into AionUi's Settings → MCP → Add Server (Import JSON) on first launch. Not auto-loaded.",
+  "id": "mcp_example_filesystem",
+  "name": "Filesystem (example)",
+  "description": "Read/write local files via the official @modelcontextprotocol/server-filesystem package.",
+  "enabled": false,
+  "transport": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "${HOME}/Documents"],
+    "env": {}
+  },
+  "builtin": false,
+  "originalJson": "{\"name\":\"Filesystem (example)\",\"transport\":{\"type\":\"stdio\",\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-filesystem\",\"${HOME}/Documents\"]}}"
+}
