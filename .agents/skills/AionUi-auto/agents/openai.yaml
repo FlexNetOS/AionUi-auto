@@ -1,0 +1,6 @@
+interface:
+  display_name: "AionUi Auto"
+  short_description: "Repo-specific patterns and workflows for AionUi-auto"
+  default_prompt: "Use the AionUi-auto repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true
