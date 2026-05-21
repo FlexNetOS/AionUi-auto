@@ -1,0 +1,11 @@
+{
+  "_comment": "Reference template — schema matches AcpBackendConfig from src/common/types/acpTypes.ts:124. Copy fields into AionUi's Settings → Agents → Add Custom Agent on first launch. Not auto-loaded.",
+  "id": "custom_example_codex",
+  "name": "Codex (example)",
+  "description": "OpenAI Codex CLI wired through ACP transport. Replace defaultCliPath with the real binary on your machine.",
+  "avatar": "🤖",
+  "defaultCliPath": "/usr/local/bin/codex",
+  "acpArgs": ["--acp"],
+  "enabled": false,
+  "isPreset": false
+}

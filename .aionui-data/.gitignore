@@ -1,0 +1,38 @@
+# Nested .gitignore for .aionui-data/
+#
+# Strategy: deny everything by default, then allowlist the small set of
+# human-authored config files that should be version-controlled. This way
+# any new Electron / Chromium subdirectory (Local Storage, IndexedDB,
+# GPUCache, Cookies, Network, DawnCache, etc.) is automatically excluded
+# without us having to maintain a long denylist.
+
+# Deny by default.
+*
+
+# Allow this ignore file itself.
+!.gitignore
+
+# Allow the dir-level README.
+!README.md
+
+# Allow committed config namespaces and their JSON contents.
+!mcp-servers/
+!mcp-servers/*.json
+!mcp-servers/README.md
+
+!agents/
+!agents/*.json
+!agents/README.md
+
+# Allow committed prompt templates (folder optional — uncomment when used).
+# !prompts/
+# !prompts/*.md
+
+# Never track secrets, even if accidentally placed in tracked folders.
+*.secret
+*.secret.*
+*credentials*
+*.pem
+*.key
+.env
+.env.*

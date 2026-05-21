@@ -1,0 +1,17 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=AionUi (Dev — FlexNetOS)
+GenericName=AI Desktop Assistant (Dev)
+Comment=AionUi dev launch with FlexNetOS run-in-place wrapper
+Categories=Development;Utility;Network;
+Terminal=false
+StartupNotify=true
+StartupWMClass=AionUi-Dev
+# Exec is rewritten by install-launcher.sh to embed the absolute path of
+# flexnetos/launch/run-in-place.sh. The placeholder below makes the file
+# valid for inspection but will be replaced at install time.
+Exec=@FLEXNETOS_RUN_IN_PLACE@
+# Icon is rewritten by install-launcher.sh to point at resources/app_dev.png
+# in the cloned repo (no copy is made — just a path reference).
+Icon=@FLEXNETOS_ICON@
